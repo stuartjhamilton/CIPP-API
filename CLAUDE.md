@@ -542,9 +542,98 @@ Set-CIPPFeatureFlag -FlagName 'MyFeature' -Enabled $true
 
 ---
 
+## Writing Alert Functions
+
+Alert functions live in `Modules/CIPPCore/Public/Alerts/` and are named `Get-CIPPAlert<Something>.ps1`. See `.github/agents/CIPP-Alert-Agent.md` for the full authoring guide.
+
+Key rules:
+- Use `Write-AlertTrace` to emit alert results (not `Write-Output` or `return`)
+- Use `New-GraphGetRequest` / `New-ExoRequest` for API calls — never inline raw HTTP
+- Use `Test-CIPPStandardLicense` for any license/SKU capability checks
+- Do **not** modify the module manifest — functions are auto-loaded from `Public/`
+- No CodeQL; use `PSScriptAnalyzer` for linting
+
+```powershell
+function Get-CIPPAlertMyCondition {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        $TenantFilter
+    )
+
+    try {
+        # Check license if required
+        $HasLicense = Test-CIPPStandardLicense -StandardName 'MyCheck' -TenantFilter $TenantFilter `
+            -RequiredCapabilities @('AAD_PREMIUM')
+        if (-not $HasLicense) { return }
+
+        # Check condition via Graph
+        $Data = New-GraphGetRequest -uri 'https://graph.microsoft.com/v1.0/...' -tenantid $TenantFilter
+
+        if ($Data.SomeProperty -ne $ExpectedValue) {
+            Write-AlertTrace -cmdletName $MyInvocation.MyCommand -tenantFilter $TenantFilter -data $Data
+        }
+    } catch {
+        Write-LogMessage -API 'Alerts' -tenant $TenantFilter -message "Alert check failed: $($_.Exception.Message)" -sev Error
+    }
+}
+```
+
+---
+
+## Adding a New Standard — Frontend Integration
+
+When creating a new standard, you must also add an entry to `Config/standards.json`. The JSON format maps to the standard function via the naming convention `standards.<APIName>` (from `.COMPONENT (APIName)`).
+
+Example entry for `Invoke-CIPPStandardMyStandard`:
+```json
+{
+  "name": "standards.MyStandard",
+  "cat": "Global Standards",
+  "tag": [],
+  "helpText": "Short description shown in the UI.",
+  "docsDescription": "Longer description for documentation.",
+  "executiveText": "Executive-friendly summary of what this standard does.",
+  "addedComponent": [],
+  "label": "My Standard Display Name",
+  "impact": "Low Impact",
+  "impactColour": "info",
+  "addedDate": "2024-01-01",
+  "powershellEquivalent": "Set-SomeCmdlet",
+  "recommendedBy": []
+}
+```
+
+If your standard has configurable inputs, add them in `addedComponent`. Each component maps to `$Settings.<PropertyName>` in your function:
+```json
+"addedComponent": [
+  {
+    "type": "textField",
+    "name": "standards.MyStandard.SomeOption",
+    "label": "Some Option Label",
+    "required": false
+  }
+]
+```
+
+When submitting a PR for a new standard, include the `standards.json` payload in the PR description so the frontend team can update the CIPP frontend repository.
+
+---
+
 ## Testing
 
 Tests live in `Tests/` organized by category (Alerts, Standards, Endpoint). Test files follow the pattern `*.Tests.ps1`. The testing infrastructure uses `Invoke-ExecTestRun`, `Invoke-ListTests`, and `Add-CippTestResult` functions.
+
+---
+
+## Specialized Agent Files
+
+The repository ships GitHub Copilot custom agents in `.github/agents/` for common engineering tasks. Reference these before writing alerts or standards:
+
+| File | Purpose |
+|------|---------|
+| `.github/agents/CIPP-Alert-Agent.md` | Guide for creating `Get-CIPPAlert*` functions |
+| `.github/agents/CIPP-Standards-Agent.md` | Guide for creating `Invoke-CIPPStandard*` functions + `standards.json` entries |
 
 ---
 
